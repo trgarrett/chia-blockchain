@@ -768,6 +768,94 @@ async def test_validation_timeout() -> None:
 
 
 @pytest.mark.anyio
+async def test_validation_timeout_stored() -> None:
+    # validation_timeout should be stored as-is on the MempoolManager
+    async with MempoolManager.managed(
+        zero_calls_get_coin_records,
+        zero_calls_get_unspent_lineage_info_for_puzzle_hash,
+        DEFAULT_CONSTANTS,
+        InlineExecutor(),
+        validation_timeout=3.5,
+    ) as mempool_manager:
+        assert mempool_manager.validation_timeout == 3.5
+
+
+@pytest.mark.anyio
+async def test_validation_timeout_config_defaults_to_half_block_creation() -> None:
+    # Reproduces the config lookup expression used in full_node.py:
+    # mempool_validation_timeout defaults to block_creation_timeout / 2
+    config: dict[str, Any] = {"block_creation_timeout": 4.0}
+    timeout = config.get("mempool_validation_timeout", config.get("block_creation_timeout", 2.0) / 2)
+    assert timeout == 2.0
+
+    async with MempoolManager.managed(
+        zero_calls_get_coin_records,
+        zero_calls_get_unspent_lineage_info_for_puzzle_hash,
+        DEFAULT_CONSTANTS,
+        InlineExecutor(),
+        validation_timeout=timeout,
+    ) as mempool_manager:
+        assert mempool_manager.validation_timeout == 2.0
+
+
+@pytest.mark.anyio
+async def test_validation_timeout_config_explicit_override() -> None:
+    # When mempool_validation_timeout is set explicitly, it takes precedence
+    config: dict[str, Any] = {"block_creation_timeout": 4.0, "mempool_validation_timeout": 0.5}
+    timeout = config.get("mempool_validation_timeout", config.get("block_creation_timeout", 2.0) / 2)
+    assert timeout == 0.5
+
+    async with MempoolManager.managed(
+        zero_calls_get_coin_records,
+        zero_calls_get_unspent_lineage_info_for_puzzle_hash,
+        DEFAULT_CONSTANTS,
+        InlineExecutor(),
+        validation_timeout=timeout,
+    ) as mempool_manager:
+        assert mempool_manager.validation_timeout == 0.5
+
+
+@pytest.mark.anyio
+async def test_validation_timeout_config_fallback_when_no_config() -> None:
+    # When neither key is set, falls back to 2.0 / 2 = 1.0
+    config: dict[str, Any] = {}
+    timeout = config.get("mempool_validation_timeout", config.get("block_creation_timeout", 2.0) / 2)
+    assert timeout == 1.0
+
+    async with MempoolManager.managed(
+        zero_calls_get_coin_records,
+        zero_calls_get_unspent_lineage_info_for_puzzle_hash,
+        DEFAULT_CONSTANTS,
+        InlineExecutor(),
+        validation_timeout=timeout,
+    ) as mempool_manager:
+        assert mempool_manager.validation_timeout == 1.0
+
+
+@pytest.mark.anyio
+async def test_validation_timeout_half_rejects_slow_bundle() -> None:
+    # A bundle that would pass under the full block_creation_timeout should be
+    # rejected when validation_timeout is halved and the bundle is slow enough.
+    # With validation_timeout=0 even a trivial bundle exceeds the deadline.
+    config: dict[str, Any] = {"block_creation_timeout": 0.0}
+    timeout = config.get("mempool_validation_timeout", config.get("block_creation_timeout", 2.0) / 2)
+    assert timeout == 0.0
+
+    async with MempoolManager.managed(
+        zero_calls_get_coin_records,
+        zero_calls_get_unspent_lineage_info_for_puzzle_hash,
+        DEFAULT_CONSTANTS,
+        InlineExecutor(),
+        validation_timeout=timeout,
+    ) as mempool_manager:
+        await mempool_manager.new_peak(create_test_block_record(), None)
+        conditions = [[ConditionOpcode.CREATE_COIN, IDENTITY_PUZZLE_HASH, 1]]
+        sb = spend_bundle_from_conditions(conditions)
+        with pytest.raises(ValueError, match="timeout"):
+            await mempool_manager.pre_validate_spendbundle(sb)
+
+
+@pytest.mark.anyio
 async def test_too_many_atoms() -> None:
     # a very large MAX_BLOCK_COST_CLVM makes the per-cost atom/pair threshold
     # effectively 0, triggering the density check on any spend

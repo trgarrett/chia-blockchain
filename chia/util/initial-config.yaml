@@ -331,6 +331,12 @@ full_node:
   # measure to not spend too much time building the block generator.
   # block_creation_timeout: 2.0
 
+  # Maximum wall-clock time (seconds) allowed for validating a single spend
+  # bundle before it is rejected from the mempool and not relayed to peers.
+  # Defaults to block_creation_timeout / 2, matching the cost-based cap that
+  # already limits a single transaction to half the block cost budget.
+  # mempool_validation_timeout: 1.0
+
   # the number of threads used to read from the blockchain database
   # concurrently. There's always only 1 writer, but the number of readers is
   # configurable
